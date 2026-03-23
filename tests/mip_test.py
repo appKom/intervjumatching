@@ -187,7 +187,75 @@ class MipTest(unittest.TestCase):
         self.assertEqual(match["matched_meetings"], 1)
 
         self.assertIn(match["matchings"][0], possible_matchings, "Møte var ikke blant matchede intervjuer")
+    
+    def test_all_availability_first_day_still_matches(self):
+        """Tester at intervjuer fortsatt blir matchet selv om all ledig tid 
+        og alle komité-slots kun er på første dag av perioden."""
 
+        appkom = Committee(name="Appkom", interview_length=timedelta(minutes=20))
+        prokom = Committee(name="Prokom", interview_length=timedelta(minutes=20))
+
+        # Begge komiteer har kun slots på første (og eneste) dag
+        appkom.add_interview_slot(
+            TimeInterval(datetime(2025, 10, 24, 8, 0), datetime(2025, 10, 24, 12, 0)), "AppkomRom"
+        )
+        prokom.add_interview_slot(
+            TimeInterval(datetime(2025, 10, 24, 8, 0), datetime(2025, 10, 24, 12, 0)), "ProkomRom"
+        )
+
+        simen: Applicant = Applicant(name="Simen")
+        simen.add_committees({appkom, prokom})
+        simen.add_interval(
+            TimeInterval(datetime(2025, 10, 24, 8, 0), datetime(2025, 10, 24, 12, 0))
+        )
+
+        julian: Applicant = Applicant(name="Julian")
+        julian.add_committees({appkom})
+        julian.add_interval(
+            TimeInterval(datetime(2025, 10, 24, 8, 0), datetime(2025, 10, 24, 12, 0))
+        )
+
+        match = match_meetings(applicants={simen, julian}, committees={appkom, prokom})
+
+        # Alle 3 ønskede intervjuer skal kunne matches selv om alt er på dag 1
+        self.assertEqual(match["matched_meetings"], 3,
+                         "Alle intervjuer burde bli matchet selv om alt er på første dag")
+        self.check_constraints(matchings=match["matchings"])
+    
+    def test_matching_not_first_day(self):
+        """Tester at intervjuer ikke blir matchet første dag i perioden
+        når det finnes like gode alternativer på dag 2."""
+
+        appkom = Committee(name="Appkom", interview_length=timedelta(minutes=20))
+
+        appkom.add_interview_slot(
+            TimeInterval(datetime(2025, 10, 24, 11, 0), datetime(2025, 10, 24, 13, 0)), "AppkomRom"
+        )
+        appkom.add_interview_slot(
+            TimeInterval(datetime(2025, 10, 25, 11, 0), datetime(2025, 10, 25, 13, 0)), "AppkomRom"
+        )
+
+        simen: Applicant = Applicant(name="Simen")
+        simen.add_committees({appkom})
+        simen.add_interval(
+            TimeInterval(datetime(2025, 10, 24, 11, 0), datetime(2025, 10, 24, 13, 0))
+        )
+        simen.add_interval(
+            TimeInterval(datetime(2025, 10, 25, 11, 0), datetime(2025, 10, 25, 13, 0))
+        )
+
+        match = match_meetings(applicants={simen}, committees={appkom})
+
+        self.assertEqual(match["matched_meetings"], 1,
+                         "Intervjuet burde bli matchet")
+        self.check_constraints(matchings=match["matchings"])
+
+        # Sjekk at intervjuet ble satt på dag 2 (25. oktober), ikke dag 1 (24. oktober)
+        matched_interval = match["matchings"][0][2]
+        self.assertEqual(matched_interval.start.date(), date(2025, 10, 25),
+                         f"Intervjuet burde bli satt på dag 2 (25. oktober), "
+                         f"men ble satt på {matched_interval.start.date()}")
+        
 
     def test_realistic(self):
         """

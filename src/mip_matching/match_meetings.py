@@ -12,12 +12,26 @@ from mip_matching.utils import subtract_time
 # Hvor stort buffer man ønsker å ha mellom intervjuene
 APPLICANT_BUFFER_LENGTH = timedelta(minutes=15)
 
-# Et mål på hvor viktig det er at intervjuer er i nærheten av hverandre
-CLUSTERING_WEIGHT = 0.001
-
 # Når på dagen man helst vil ha intervjuene rundt
 CLUSTERING_TIME_BASELINE = time(12, 00)
-MAX_SCALE_CLUSTERING_TIME = timedelta(seconds=43200)  # TODO: Rename variable
+MAX_SCALE_CLUSTERING_TIME = timedelta(seconds=43200)
+
+# En liste med alle sekundærmål-vekter.
+# Hver vekt bestemmer hvor mye det tilhørende sekundærmålet påvirker optimeringen.
+# Høyere vekt = sterkere preferanse for det målet.
+
+# n^2*x + n*x + h, der n er antall intervjuer, x er en konstant.
+def calculate_secondary_objective_weights(num_interviews: int) -> dict[str, float]:
+    # Vekten for clustering øker kvadratisk med antall intervjuer, for å prioritere det mer når det er mange intervjuer.
+    clustering_weight = 0.001 * (num_interviews ** 2)
+
+    # Vekten for spredning over perioden øker lineært med antall intervjuer, for å sikre at det fortsatt har en betydelig effekt.
+    firstDay_weight = 0.001 * num_interviews
+
+    return {
+        "clustering": clustering_weight,
+        "first_day": firstDay_weight
+    }
 
 
 def match_meetings(applicants: set[Applicant], committees: set[Committee]) -> MeetingMatch:
@@ -25,6 +39,7 @@ def match_meetings(applicants: set[Applicant], committees: set[Committee]) -> Me
     model = mip.Model(sense=mip.MAXIMIZE)
 
     m: dict[Matching, mip.Var] = {}
+
 
     # Lager alle maksimeringsvariabler
     for applicant in applicants:
@@ -52,21 +67,41 @@ def match_meetings(applicants: set[Applicant], committees: set[Committee]) -> Me
                               for room in committee.get_rooms(interval)
                               # type: ignore
                               ) <= 1
-
     # Legger inn begrensninger for at en søker ikke kan ha overlappende intervjutider
     # og minst har et buffer mellom hvert intervju som angitt
     for applicant in applicants:
-        potential_interviews = set(slot for slot in m.keys() if slot[0] == applicant)
+        # Grupper variabler per unikt (komité, intervall) — rom er irrelevant for overlap
+        unique_slots: dict[tuple, list[mip.Var]] = {}
+        for slot in m.keys():
+            if slot[0] == applicant:
+                key = (slot[1], slot[2])  # (committee, interval)
+                if key not in unique_slots:
+                    unique_slots[key] = []
+                unique_slots[key].append(m[slot])
 
-        for interview_a, interview_b in combinations(potential_interviews, r=2):
-            if interview_a[2].intersects(interview_b[2]) or interview_a[2].is_within_distance(interview_b[2], APPLICANT_BUFFER_LENGTH):
-                model += m[interview_a] + m[interview_b] <= 1  # type: ignore
+        slot_keys = list(unique_slots.keys())
+        for i, key_a in enumerate(slot_keys):
+            for key_b in slot_keys[i + 1:]:
+                interval_a = key_a[1]
+                interval_b = key_b[1]
+                if interval_a.intersects(interval_b) or interval_a.is_within_distance(interval_b, APPLICANT_BUFFER_LENGTH):
+                    # Sum av alle rom-variabler for begge slots <= 1
+                    model += mip.xsum(unique_slots[key_a]) + mip.xsum(unique_slots[key_b]) <= 1  # type: ignore
+        
+    SECONDARY_OBJECTIVE_WEIGHTS = calculate_secondary_objective_weights(model.num_cols);
 
     # Legger til sekundærmål om at man ønsker å sentrere intervjuer rundt CLUSTERING_TIME_BASELINE
-    clustering_penalties = []
+    # og at man foretrekker intervjuer senere i søknadsperioden
+    secondary_penalties = []
+
+    # Finn den tidligste og seneste datoen blant alle intervjuer for å normalisere
+    all_dates = [interval.start for (_, _, interval, _) in m.keys()]
+    min_date = min(all_dates)
 
     for name, variable in m.items():
         applicant, committee, interval, room = name
+
+        # Sekundærmål 1: Clustering rundt CLUSTERING_TIME_BASELINE
         if interval.start.time() < CLUSTERING_TIME_BASELINE:
             relative_distance_from_baseline = subtract_time(CLUSTERING_TIME_BASELINE,
                                                             interval.end.time()) / MAX_SCALE_CLUSTERING_TIME
@@ -74,13 +109,19 @@ def match_meetings(applicants: set[Applicant], committees: set[Committee]) -> Me
             relative_distance_from_baseline = subtract_time(interval.start.time(),
                                                             CLUSTERING_TIME_BASELINE) / MAX_SCALE_CLUSTERING_TIME
 
-        clustering_penalties.append(
-            CLUSTERING_WEIGHT * relative_distance_from_baseline * variable)  # type: ignore
+        secondary_penalties.append(
+            SECONDARY_OBJECTIVE_WEIGHTS["clustering"] * relative_distance_from_baseline * variable)  # type: ignore
 
+        # Sekundærmål 2: Foretrekk intervjuer senere i perioden
+        # Gir lavere straff jo senere i perioden intervjuet er
+        if interval.start.date() == min_date.date():
+            secondary_penalties.append(
+                SECONDARY_OBJECTIVE_WEIGHTS["first_day"] * variable) # type: ignore
+            
     # Setter mål til å være maksimering av antall møter
-    # med sekundærmål om å samle intervjuene rundt CLUSTERING_TIME_BASELINE
+    # med sekundærmål om å samle intervjuene og foretrekke senere datoer
     model.objective = mip.maximize(
-        mip.xsum(m.values()) - mip.xsum(clustering_penalties))
+        mip.xsum(m.values()) - mip.xsum(secondary_penalties))
 
     # Kjør optimeringen
     solver_status = model.optimize()
@@ -95,6 +136,9 @@ def match_meetings(applicants: set[Applicant], committees: set[Committee]) -> Me
 
     total_wanted_meetings = sum(
         len(applicant.get_committees()) for applicant in applicants)
+    
+    print(f"Matched {total_matched_meetings} out of {total_wanted_meetings} wanted meetings.")
+    print(model.num_cols)
 
     match_object: MeetingMatch = {
         "solver_status": solver_status,
