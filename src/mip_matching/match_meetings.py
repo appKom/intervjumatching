@@ -23,16 +23,9 @@ MAX_SCALE_CLUSTERING_TIME = timedelta(seconds=43200)
 # n^2*x + n*x + h, der n er antall intervjuer, x er en konstant.
 def calculate_secondary_objective_weights(num_interviews: int) -> dict[str, float]:
     # Vekten for clustering øker kvadratisk med antall intervjuer, for å prioritere det mer når det er mange intervjuer.
-    clustering_weight = 1/(num_interviews ** 2)
+    weights = ["clustering", "first_day"]
 
-    # Vekten for spredning over perioden øker lineært med antall intervjuer, for å sikre at det fortsatt har en betydelig effekt.
-    firstDay_weight = 1 / num_interviews
-
-    return {
-        "clustering": clustering_weight,
-        "first_day": firstDay_weight
-    }
-
+    return {weight_name: 1/(num_interviews**(i+1)) for i, weight_name in enumerate(weights)}
 
 def match_meetings(applicants: set[Applicant], committees: set[Committee]) -> MeetingMatch:
     """Matches meetings and returns a MeetingMatch-object"""
@@ -92,7 +85,7 @@ def match_meetings(applicants: set[Applicant], committees: set[Committee]) -> Me
 
     # Legger til sekundærmål om at man ønsker å sentrere intervjuer rundt CLUSTERING_TIME_BASELINE
     # og at man foretrekker intervjuer senere i søknadsperioden
-    secondary_penalties: list[list[mip.Var]] = [[], []]  # List for clustering, list for first_day
+    secondary_penalties: list[list[mip.Var]] = [[] for _ in range(len(SECONDARY_OBJECTIVE_WEIGHTS))]  # List for clustering, list for first_day
 
     # Finn den tidligste og seneste datoen blant alle intervjuer for å normalisere
     all_dates = [interval.start for (_, _, interval, _) in m.keys()]
@@ -117,11 +110,12 @@ def match_meetings(applicants: set[Applicant], committees: set[Committee]) -> Me
         if interval.start.date() == min_date.date():
             secondary_penalties[1].append(
                 SECONDARY_OBJECTIVE_WEIGHTS["first_day"] * variable) # type: ignore
-            
+    
+    secondary_penalties_sum = [mip.xsum(penalties) for penalties in secondary_penalties]
     # Setter mål til å være maksimering av antall møter
     # med sekundærmål om å samle intervjuene og foretrekke senere datoer
     model.objective = mip.maximize(
-        mip.xsum(m.values()) - mip.xsum(mip.xsum(penalties) for penalties in secondary_penalties)) 
+        mip.xsum(m.values()) - mip.xsum(mip.xsum(secondary_penalties))) 
 
     # Kjør optimeringen
     solver_status = model.optimize()
