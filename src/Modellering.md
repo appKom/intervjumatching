@@ -56,6 +56,19 @@ For alle `k`:
 
 - `sum(m(p, k, t)) <= c(k, t)` for alle personer `p` og tidspunkt `t`
 
+## Rom
+For å passe på at en komité får det samme rommet i påfølgende tider, vil vi ha at følgende ulikheter skal holde.
+
+
+For å redusere antall variabler introduserer vi en binær hjelpevariabel `y(c, t, r)` som representerer at komite `c` har et intervju på rom `r` på tidspunkt `t` (med en eller annen søker).
+
+For hver komité vil vi da ha:
+- `y(c, t_1, r) == y(c, t_2, r)` men kun dersom
+  - begge disse verdiene er 1 (altså at det er et intervju på )
+
+TODO: Linke `y` til `m`.
+
+
 ## Mål
 
 Maksimere `sum(m(p, k, t))` for alle `p`, `k` og `t`. Altså: Maksimere antall intervjuer som tildeles.

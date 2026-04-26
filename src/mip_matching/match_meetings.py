@@ -72,11 +72,11 @@ def match_meetings(applicants: set[Applicant], committees: set[Committee]) -> Me
 
     # y -> committee_interval_room_occupancy
     # z -> committee_interval_occupancy
-    # TODO: Make z
+    # TODO: Make z (hvorvidt komitéen har et intervju på et gitt tidspunkt)
     # for committee in committees:
         # for each interval in this committee's available times:
             # m[(applicant, committee, interval, room)] <= z[(committee, interval)] for all applicants and rooms
-            # z[(committe, interval)] <= sum(m[(applicant, committee, interval, rom) for every applicant and room]) 
+            # z[(committee, interval)] <= sum(m[(applicant, committee, interval, rom) for every applicant and room]) 
 
 
     # for committee in committees:
