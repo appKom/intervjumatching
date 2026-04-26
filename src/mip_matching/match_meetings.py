@@ -60,6 +60,7 @@ def match_meetings(applicants: set[Applicant], committees: set[Committee]) -> Me
                               for room in committee.get_rooms(interval)
                               # type: ignore
                               ) <= 1
+            
     # Legger inn begrensninger for at en søker ikke kan ha overlappende intervjutider
     # og minst har et buffer mellom hvert intervju som angitt
     for applicant in applicants:
@@ -85,16 +86,12 @@ def match_meetings(applicants: set[Applicant], committees: set[Committee]) -> Me
 
     # Legger til sekundærmål om at man ønsker å sentrere intervjuer rundt CLUSTERING_TIME_BASELINE
     # og at man foretrekker intervjuer senere i søknadsperioden
-    secondary_penalties: list[list[mip.Var]] = [[] for _ in range(len(SECONDARY_OBJECTIVE_WEIGHTS))]  # List for clustering, list for first_day
 
-    # Finn den tidligste og seneste datoen blant alle intervjuer for å normalisere
-    all_dates = [interval.start for (_, _, interval, _) in m.keys()]
-    min_date = min(all_dates)
-
+    # Sekundærmål 1: Clustering rundt CLUSTERING_TIME_BASELINE
+    clustering_penalties: list[mip.Var] = []
     for name, variable in m.items():
         applicant, committee, interval, room = name
 
-        # Sekundærmål 1: Clustering rundt CLUSTERING_TIME_BASELINE
         if interval.start.time() < CLUSTERING_TIME_BASELINE:
             relative_distance_from_baseline = subtract_time(CLUSTERING_TIME_BASELINE,
                                                             interval.end.time()) / MAX_SCALE_CLUSTERING_TIME
@@ -102,20 +99,28 @@ def match_meetings(applicants: set[Applicant], committees: set[Committee]) -> Me
             relative_distance_from_baseline = subtract_time(interval.start.time(),
                                                             CLUSTERING_TIME_BASELINE) / MAX_SCALE_CLUSTERING_TIME
 
-        secondary_penalties[0].append(
+        clustering_penalties.append(
             SECONDARY_OBJECTIVE_WEIGHTS["clustering"] * relative_distance_from_baseline * variable)  # type: ignore
 
-        # Sekundærmål 2: Foretrekk intervjuer senere i perioden
-        # Gir lavere straff jo senere i perioden intervjuet er
-        if interval.start.date() == min_date.date():
-            secondary_penalties[1].append(
-                SECONDARY_OBJECTIVE_WEIGHTS["first_day"] * variable) # type: ignore
+    # Sekundærmål 2: Straff intervjuer første dag.
     
-    secondary_penalties_sum = [mip.xsum(penalties) for penalties in secondary_penalties]
+    # Finn den tidligste og seneste datoen blant alle intervjuer for å normalisere
+    all_dates = [interval.start for (_, _, interval, _) in m.keys()]
+    min_date = min(all_dates)
+
+    first_day_penalties = [SECONDARY_OBJECTIVE_WEIGHTS["first_day"] * variable # type: ignore
+                           for name, variable in m.items()
+                             if name[2].start.date() == min_date.date()]
+    
+    secondary_penalties: list[mip.LinExpr] = [
+        mip.xsum(clustering_penalties),
+        mip.xsum(first_day_penalties),
+    ]
+
     # Setter mål til å være maksimering av antall møter
     # med sekundærmål om å samle intervjuene og foretrekke senere datoer
     model.objective = mip.maximize(
-        mip.xsum(m.values()) - mip.xsum(mip.xsum(secondary_penalties))) 
+        mip.xsum(m.values()) - mip.xsum(secondary_penalties)) 
 
     # Kjør optimeringen
     solver_status = model.optimize()
